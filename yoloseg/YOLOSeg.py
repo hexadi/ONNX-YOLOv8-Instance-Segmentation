@@ -2,7 +2,7 @@ import math
 import time
 import cv2
 import numpy as np
-from snpehelper_manager import PerfProfile,Runtime,timer,SnpeContext
+from .snpehelper_manager import PerfProfile,Runtime,timer,SnpeContext
 
 from yoloseg.utils import xywh2xyxy, nms, draw_detections, sigmoid
 
@@ -21,8 +21,10 @@ class YOLOSeg:
         return self.segment_objects(image)
 
     def initialize_model(self, path, runtime=Runtime.CPU, profile_level=PerfProfile.BALANCED, enable_cache=False):
-        self.session = DETR(path, input_layers=["images"], output_layers=["/model.23/Concat_6","/model.23/proto/cv3/act/Mul"], output_tensors=["output0","output1"], runtime=runtime, profile_level=profile_level, enable_cache=enable_cache)
+        self.session = SnpeContext(path, input_layers=["images"], output_layers=["/model.23/Concat_6","/model.23/proto/cv3/act/Mul"], output_tensors=["output0","output1"], runtime=runtime, profile_level=profile_level, enable_cache=enable_cache)
         self.session.Initialize()
+        self.get_input_details()
+        self.get_output_details()
 
     def segment_objects(self, image):
         input_tensor = self.prepare_input(image)
@@ -52,12 +54,12 @@ class YOLOSeg:
         return input_tensor
 
     def inference(self, input_tensor):
-        self.session.SetInputBuffer("images", input_tensor)
+        self.session.SetInputBuffer(input_tensor,"images")
         start = time.perf_counter()
         if(self.session.Execute() == True):
-            output0 = self.session.GetOutputBuffer("output0")
-            output1 = self.session.GetOutputBuffer("output1")
-            # print(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
+            output0 = self.session.GetOutputBuffer("output0").reshape(1,42,8400)
+            output1 = self.session.GetOutputBuffer("output1").reshape(1,32,160,160)
+            print(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
             return [output0, output1]
         else:
             return [None, None]
@@ -65,13 +67,13 @@ class YOLOSeg:
     def process_box_output(self, box_output):
 
         predictions = np.squeeze(box_output).T
+        # print(box_output.shape)
         num_classes = box_output.shape[1] - self.num_masks - 4
-
         # Filter out object confidence scores below threshold
         scores = np.max(predictions[:, 4:4+num_classes], axis=1)
         predictions = predictions[scores > self.conf_threshold, :]
         scores = scores[scores > self.conf_threshold]
-
+        print(len(scores))
         if len(scores) == 0:
             return [], [], [], np.array([])
 
