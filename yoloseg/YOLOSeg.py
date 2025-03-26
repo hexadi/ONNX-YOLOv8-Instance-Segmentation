@@ -2,7 +2,7 @@ import math
 import time
 import cv2
 import numpy as np
-import onnxruntime
+from snpehelper_manager import PerfProfile,Runtime,timer,SnpeContext
 
 from yoloseg.utils import xywh2xyxy, nms, draw_detections, sigmoid
 
@@ -20,13 +20,9 @@ class YOLOSeg:
     def __call__(self, image):
         return self.segment_objects(image)
 
-    def initialize_model(self, path):
-        self.session = onnxruntime.InferenceSession(path,
-                                                    providers=['CUDAExecutionProvider',
-                                                               'CPUExecutionProvider'])
-        # Get model info
-        self.get_input_details()
-        self.get_output_details()
+    def initialize_model(self, path, runtime=Runtime.CPU, profile_level=PerfProfile.BALANCED, enable_cache=False):
+        self.session = DETR(path, input_layers=["images"], output_layers=["/model.23/Concat_6","/model.23/proto/cv3/act/Mul"], output_tensors=["output0","output1"], runtime=runtime, profile_level=profile_level, enable_cache=enable_cache)
+        self.session.Initialize()
 
     def segment_objects(self, image):
         input_tensor = self.prepare_input(image)
@@ -41,11 +37,12 @@ class YOLOSeg:
 
     def prepare_input(self, image):
         self.img_height, self.img_width = image.shape[:2]
+        # image_data = np.expand_dims(image_data, axis=0).astype(np.float32)
 
         input_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         # Resize input image
-        input_img = cv2.resize(input_img, (self.input_width, self.input_height))
+        input_img = cv2.resize(input_img, (640,640))
 
         # Scale input pixel values to 0 to 1
         input_img = input_img / 255.0
@@ -55,11 +52,15 @@ class YOLOSeg:
         return input_tensor
 
     def inference(self, input_tensor):
+        self.session.SetInputBuffer("images", input_tensor)
         start = time.perf_counter()
-        outputs = self.session.run(self.output_names, {self.input_names[0]: input_tensor})
-
-        # print(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
-        return outputs
+        if(self.session.Execute() == True):
+            output0 = self.session.GetOutputBuffer("output0")
+            output1 = self.session.GetOutputBuffer("output1")
+            # print(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
+            return [output0, output1]
+        else:
+            return [None, None]
 
     def process_box_output(self, box_output):
 
@@ -161,16 +162,14 @@ class YOLOSeg:
                                self.class_ids, mask_alpha, mask_maps=self.mask_maps)
 
     def get_input_details(self):
-        model_inputs = self.session.get_inputs()
-        self.input_names = [model_inputs[i].name for i in range(len(model_inputs))]
+        self.input_names = ["images"]
 
-        self.input_shape = model_inputs[0].shape
+        self.input_shape = [1, 3, 640, 640]
         self.input_height = self.input_shape[2]
         self.input_width = self.input_shape[3]
 
     def get_output_details(self):
-        model_outputs = self.session.get_outputs()
-        self.output_names = [model_outputs[i].name for i in range(len(model_outputs))]
+        self.output_names = ["output0", "output1"]
 
     @staticmethod
     def rescale_boxes(boxes, input_shape, image_shape):
