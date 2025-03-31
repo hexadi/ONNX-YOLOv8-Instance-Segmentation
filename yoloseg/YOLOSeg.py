@@ -9,19 +9,19 @@ from yoloseg.utils import xywh2xyxy, nms, draw_detections, sigmoid
 
 class YOLOSeg:
 
-    def __init__(self, path, conf_thres=0.7, iou_thres=0.5, num_masks=32):
+    def __init__(self, path, conf_thres=0.7, iou_thres=0.5, num_masks=32, runtime=Runtime.CPU):
         self.conf_threshold = conf_thres
         self.iou_threshold = iou_thres
         self.num_masks = num_masks
 
         # Initialize model
-        self.initialize_model(path)
+        self.initialize_model(path, runtime=runtime)
 
     def __call__(self, image):
         return self.segment_objects(image)
 
     def initialize_model(self, path, runtime=Runtime.CPU, profile_level=PerfProfile.BALANCED, enable_cache=False):
-        self.session = SnpeContext(path, input_layers=["images"], output_layers=["/model.23/Concat_6","/model.23/proto/cv3/act/Mul"], output_tensors=["output0","output1"], runtime=runtime, profile_level=profile_level, enable_cache=enable_cache)
+        self.session = SnpeContext(path, input_layers=["images"], output_layers=["/model.23/Sigmoid","/model.23/Concat","/model.23/Mul_2","/model.23/proto/cv3/act/Mul"], output_tensors=["confidence","mask","bbox","output1"], runtime=runtime, profile_level=profile_level, enable_cache=enable_cache)
         self.session.Initialize()
         self.get_input_details()
         self.get_output_details()
@@ -55,11 +55,12 @@ class YOLOSeg:
 
     def inference(self, input_tensor):
         self.session.SetInputBuffer(input_tensor,"images")
-        start = time.perf_counter()
         if(self.session.Execute() == True):
-            output0 = self.session.GetOutputBuffer("output0").reshape(1,42,8400)
+            confidence = self.session.GetOutputBuffer("confidence").reshape(1,6,8400)
+            mask = self.session.GetOutputBuffer("mask").reshape(1,32,8400)
+            bbox = self.session.GetOutputBuffer("bbox").reshape(1,4,8400)
+            output0 = np.concatenate((bbox, confidence, mask), axis=1)
             output1 = self.session.GetOutputBuffer("output1").reshape(1,32,160,160)
-            print(f"Inference time: {(time.perf_counter() - start)*1000:.2f} ms")
             return [output0, output1]
         else:
             return [None, None]
